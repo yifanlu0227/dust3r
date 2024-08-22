@@ -1,5 +1,8 @@
 from setuptools import setup, find_packages
+from torch import cuda
 from torch.utils.cpp_extension import CppExtension, CUDAExtension, BuildExtension
+
+all_cuda_archs = cuda.get_gencode_flags().replace('compute=','arch=').split()
 
 setup(
     name='DUST3R',
@@ -9,8 +12,12 @@ setup(
               'croco', 'croco.models', 'croco.stereoflow', 'croco.utils', 'croco.models.curope'],
     ext_modules=[
         CUDAExtension(
-            name='curope2d.cuRoPE2D',
+            name='croco.models.curope.curope',
             sources=['croco/models/curope/curope.cpp', 'croco/models/curope/kernels.cu'],
+            extra_compile_args = dict(
+                nvcc=['-O3','--ptxas-options=-v',"--use_fast_math"]+all_cuda_archs, 
+                cxx=['-O3']
+            )
         )
     ],
     cmdclass={
