@@ -1,10 +1,10 @@
-torch
-torchvision
+# torch
+# torchvision
 roma
 gradio
 matplotlib
 tqdm
-opencv-python
+# opencv-python
 scipy
 einops
 trimesh

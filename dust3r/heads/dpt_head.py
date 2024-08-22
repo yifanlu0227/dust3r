@@ -49,18 +49,19 @@ class DPTOutputAdapter_fix(DPTOutputAdapter):
         # Reshape tokens to spatial representation
         layers = [rearrange(l, 'b (nh nw) c -> b c nh nw', nh=N_H, nw=N_W) for l in layers]
 
+        # act_postprocess change resolution. idx=0 up 4x, idx=1 up 2x, idx=2 up 1x, idx=3 down 2x
         layers = [self.act_postprocess[idx](l) for idx, l in enumerate(layers)]
         # Project layers to chosen feature dim
         layers = [self.scratch.layer_rn[idx](l) for idx, l in enumerate(layers)]
 
         # Fuse layers using refinement stages
-        path_4 = self.scratch.refinenet4(layers[3])[:, :, :layers[2].shape[2], :layers[2].shape[3]]
-        path_3 = self.scratch.refinenet3(path_4, layers[2])
-        path_2 = self.scratch.refinenet2(path_3, layers[1])
-        path_1 = self.scratch.refinenet1(path_2, layers[0])
+        path_4 = self.scratch.refinenet4(layers[3])[:, :, :layers[2].shape[2], :layers[2].shape[3]] # 32 x 32
+        path_3 = self.scratch.refinenet3(path_4, layers[2]) # 64 x 64
+        path_2 = self.scratch.refinenet2(path_3, layers[1]) # 128 x 128
+        path_1 = self.scratch.refinenet1(path_2, layers[0]) # 256 x 256
 
         # Output head
-        out = self.head(path_1)
+        out = self.head(path_1) # 512 x 512
 
         return out
 
@@ -87,6 +88,9 @@ class PixelwiseTaskWithDPT(nn.Module):
         self.dpt.init(**dpt_init_args)
 
     def forward(self, x, img_info):
+        """
+        x is all output of each decoder block
+        """
         out = self.dpt(x, image_size=(img_info[0], img_info[1]))
         if self.postprocess:
             out = self.postprocess(out, self.depth_mode, self.conf_mode)
