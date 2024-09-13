@@ -86,7 +86,8 @@ class PointCloudOptimizer(BasePCOptimizer):
         for idx, focal in zip(self._get_msk_indices(msk), known_focals):
             if self.verbose:
                 print(f' (setting focal #{idx} = {focal})')
-            self._no_grad(self._set_focal(idx, focal))
+            self._set_focal(idx, focal)
+            # self._no_grad(self._set_focal(idx, focal))
 
         self.im_focals.requires_grad_(False)
 
@@ -96,7 +97,8 @@ class PointCloudOptimizer(BasePCOptimizer):
         for idx, pp in zip(self._get_msk_indices(msk), known_pp):
             if self.verbose:
                 print(f' (setting principal point #{idx} = {pp})')
-            self._no_grad(self._set_principal_point(idx, pp))
+            self._set_principal_point(idx, pp)
+            # self._no_grad(self._set_principal_point(idx, pp))
 
         self.im_pp.requires_grad_(False)
 
@@ -135,7 +137,8 @@ class PointCloudOptimizer(BasePCOptimizer):
         param = self.im_pp[idx]
         H, W = self.imshapes[idx]
         if param.requires_grad or force:  # can only init a parameter not already initialized
-            param.data[:] = to_cpu(to_numpy(pp) - (W/2, H/2)) / 10
+            param.data[:] = to_cpu(to_numpy(pp) - (W/2, H/2)) / 10 # relative to the center
+            print(f'set pp: {param.data}')
         return param
 
     def get_principal_points(self):
