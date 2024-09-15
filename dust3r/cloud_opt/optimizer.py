@@ -204,6 +204,94 @@ class PointCloudOptimizer(BasePCOptimizer):
         return li + lj
 
 
+
+class PointCloudOptimizerDepthSupervision(PointCloudOptimizer):
+    """
+    This is a class that extends PointCloudOptimizer to include depth supervision.
+
+    We use depth anything v2 to get GT label, and apply affine-invariant mean absolute error loss
+    on the dust3r's depth map. See http://arxiv.org/abs/2401.10891 Section 3.1 for more details.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # images are stored in self.img, list of numpy.ndarray [H, W, 3] in [0, 1]
+        from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+        depth_anything_model='depth-anything/Depth-Anything-V2-Large-hf'
+        image_processor = AutoImageProcessor.from_pretrained(depth_anything_model)
+        model = AutoModelForDepthEstimation.from_pretrained(depth_anything_model).cuda()
+
+        img_seq_tensor = torch.tensor(np.stack(self.imgs, axis=0)).cuda().permute(0, 3, 1, 2).float()
+        inputs = image_processor(images=img_seq_tensor, return_tensors="pt", do_rescale=False)
+        inputs = {k: v.cuda() for k, v in inputs.items()}
+        with torch.no_grad():
+            outputs = model(**inputs)
+            predicted_depth = outputs.predicted_depth
+
+        # interpolate to original size
+        prediction = torch.nn.functional.interpolate(
+            predicted_depth.unsqueeze(1), # [T, 1, H, W]
+            size=img_seq_tensor.shape[2:],
+            mode="bicubic",
+            align_corners=False,
+        )
+        self.depth_GT = prediction.squeeze(1).flatten(1) # [T, H*W]
+        self.depth_GT_mask = self.depth_GT > 0
+        self.depth_loss_weight = 0.05
+    
+    def affine_invariant_loss(self, preds, gts, gt_masks):
+        # preds, gts: [N, H, W]
+        # gt_masks: [N, H, W]
+
+        losses = []
+
+        for pred, gt, gt_mask in zip(preds, gts, gt_masks):
+            pred = pred.flatten()
+            gt = gt.flatten()
+            gt_mask = gt_mask.flatten()
+
+            pred = pred[gt_mask]
+            gt = gt[gt_mask]
+            
+            pred_median = torch.median(pred)
+            gt_median = torch.median(gt)
+
+            gt_scale = (gt - gt_median).abs().mean()
+            pred_scale = (pred - pred_median).abs().mean()
+
+            gt_rescale = (gt - gt_median) / gt_scale
+            pred_rescale = (pred - pred_median) / pred_scale
+
+            loss = (gt_rescale - pred_rescale).abs().mean()
+            losses.append(loss)
+
+        return torch.stack(losses).mean()
+
+    def forward(self):
+        pw_poses = self.get_pw_poses()  # cam-to-world
+        pw_adapt = self.get_adaptors().unsqueeze(1)
+        proj_pts3d = self.get_pts3d(raw=True)
+
+        # rotate pairwise prediction according to pw_poses
+        aligned_pred_i = geotrf(pw_poses, pw_adapt * self._stacked_pred_i)
+        aligned_pred_j = geotrf(pw_poses, pw_adapt * self._stacked_pred_j)
+
+        # compute the less
+        li = self.dist(proj_pts3d[self._ei], aligned_pred_i, weight=self._weight_i).sum() / self.total_area_i
+        lj = self.dist(proj_pts3d[self._ej], aligned_pred_j, weight=self._weight_j).sum() / self.total_area_j
+
+        # list of flattened depth maps
+        depth = self.get_depthmaps(raw=True)
+
+        # list of flattened GT depth maps
+        depth_GT = self.depth_GT # [N, H*W]
+        depth_GT_mask = self.depth_GT_mask # [N, H*W]
+
+        depth_loss = self.affine_invariant_loss(depth, depth_GT, depth_GT_mask) * self.depth_loss_weight
+
+        return li + lj + depth_loss
+
 def _fast_depthmap_to_pts3d(depth, pixel_grid, focal, pp):
     pp = pp.unsqueeze(1)
     focal = focal.unsqueeze(1)
